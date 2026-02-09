@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Solar Drift Explorer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800&family=Space+Grotesk:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="hud">
+        <div class="hud-card">
+          <span>FPS</span>
+          <strong id="fps">0</strong>
+        </div>
+        <div class="hud-card">
+          <span>Speed</span>
+          <strong id="speed">0.0 km/s</strong>
+        </div>
+        <div class="hud-card">
+          <span>Nearest</span>
+          <strong id="nearest">Sun</strong>
+        </div>
+        <div class="hud-card">
+          <span>Distance</span>
+          <strong id="distance">0 km</strong>
+        </div>
+        <div class="hud-card">
+          <span>Earth Clock (UTC)</span>
+          <strong id="earth-clock">00:00:00</strong>
+        </div>
+        <div class="hud-card">
+          <span>Ship Clock (UTC)</span>
+          <strong id="ship-clock">00:00:00</strong>
+        </div>
+        <div class="hud-card">
+          <span>Ship vs Earth</span>
+          <strong id="time-delta">+0.0s/s</strong>
+        </div>
+      </header>
+
+      <aside class="controls">
+        <p><kbd>Click + Drag</kbd> or <kbd>Pointer Lock</kbd> mouse look</p>
+        <p><kbd>W/S</kbd> forward/brake <kbd>A/D</kbd> strafe</p>
+        <p><kbd>R/F</kbd> up/down <kbd>Arrows</kbd> alt look</p>
+        <p><kbd>Q/E</kbd> roll <kbd>Shift</kbd> boost</p>
+        <p><kbd>M</kbd> toggle music</p>
+        <p><kbd>1-9</kbd> planets, <kbd>+</kbd> sun, <kbd>0</kbd> black hole teleport</p>
+        <p><kbd>Space</kbd> immediate full stop</p>
+        <p><kbd>Visit Planet</kbd> opens surface walk mode</p>
+      </aside>
+
+      <aside class="planet-panel">
+        <h2>Visit Planet</h2>
+        <div class="planet-grid">
+          <button type="button" data-planet="Mercury">Mercury</button>
+          <button type="button" data-planet="Venus">Venus</button>
+          <button type="button" data-planet="Earth">Earth</button>
+          <button type="button" data-planet="Moon">Moon</button>
+          <button type="button" data-planet="Mars">Mars</button>
+          <button type="button" data-planet="Jupiter">Jupiter</button>
+          <button type="button" data-planet="Saturn">Saturn</button>
+          <button type="button" data-planet="Uranus">Uranus</button>
+          <button type="button" data-planet="Neptune">Neptune</button>
+        </div>
+        <h3 class="panel-subtitle">Teleport Orbit</h3>
+        <div class="planet-grid teleport-grid">
+          <button type="button" data-teleport="Sun">Sun</button>
+          <button type="button" data-teleport="Mercury">1 Mercury</button>
+          <button type="button" data-teleport="Venus">2 Venus</button>
+          <button type="button" data-teleport="Earth">3 Earth</button>
+          <button type="button" data-teleport="Moon">4 Moon</button>
+          <button type="button" data-teleport="Mars">5 Mars</button>
+          <button type="button" data-teleport="Jupiter">6 Jupiter</button>
+          <button type="button" data-teleport="Saturn">7 Saturn</button>
+          <button type="button" data-teleport="Uranus">8 Uranus</button>
+          <button type="button" data-teleport="Neptune">9 Neptune</button>
+          <button type="button" data-teleport="Black Hole">0 Black Hole</button>
+        </div>
+        <button id="music-toggle-btn" type="button" class="music-btn">Music: On</button>
+        <button id="return-orbit-btn" type="button" class="return-btn">Return To Orbit</button>
+      </aside>
+
+      <main id="game-root" aria-label="Solar system viewport"></main>
+
+      <div id="overlay" class="overlay visible" role="dialog" aria-live="polite">
+        <div class="panel">
+          <p class="eyebrow">SpaceProgram</p>
+          <h1 id="overlay-title">Solar Drift Explorer</h1>
+          <p id="overlay-text">
+            Pilot a high-detail ship through a realistic solar-system model and inspect planets from orbit.
+          </p>
+          <button id="action-btn" type="button">Launch Explorer</button>
+          <p class="tiny">Click inside viewport to lock mouse for cinematic flight control.</p>
+        </div>
+      </div>
+    </div>
+
+    <audio id="bg-music" loop preload="auto" src="./assets/audio/interstellar-style.mp3"></audio>
+
+    <script src="https://unpkg.com/three@0.136.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.136.0/examples/js/postprocessing/Pass.js"></script>
+    <script src="https://unpkg.com/three@0.136.0/examples/js/shaders/CopyShader.js"></script>
+    <script src="https://unpkg.com/three@0.136.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="https://unpkg.com/three@0.136.0/examples/js/postprocessing/ShaderPass.js"></script>
+    <script src="https://unpkg.com/three@0.136.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://unpkg.com/three@0.136.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://unpkg.com/three@0.136.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+    <script src="https://unpkg.com/three@0.136.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://unpkg.com/three@0.136.0/examples/js/loaders/RGBELoader.js"></script>
+    <script src="https://unpkg.com/three@0.136.0/examples/js/utils/SkeletonUtils.js"></script>
+    <script src="./src/game.js"></script>
+  </body>
+</html>

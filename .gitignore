@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Local environment / IDE
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Test/report outputs
+playwright-report/
+test-results/
+coverage/
+
+# Local debug / temp artifacts
+_debug_*
+_runtime_*
+_tmp_*
+_three136.min.js

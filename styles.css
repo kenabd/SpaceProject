@@ -1,0 +1,315 @@
+:root {
+  --bg-0: #01020a;
+  --bg-1: #071430;
+  --bg-2: #1a263f;
+  --ink: #f6f8ff;
+  --muted: #9db0cc;
+  --accent: #59d0ff;
+  --card-bg: rgba(7, 16, 37, 0.68);
+  --line: rgba(121, 177, 255, 0.35);
+  --shadow: 0 20px 48px rgba(0, 0, 0, 0.5);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  overflow: hidden;
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(85vw 50vh at 10% -20%, rgba(72, 153, 255, 0.22), transparent 70%),
+    radial-gradient(70vw 55vh at 92% 0%, rgba(255, 140, 61, 0.22), transparent 72%),
+    linear-gradient(135deg, var(--bg-0) 0%, var(--bg-1) 46%, var(--bg-2) 100%);
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+#game-root {
+  position: absolute;
+  inset: 0;
+}
+
+#game-root canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.hud {
+  position: absolute;
+  z-index: 20;
+  top: 14px;
+  left: 14px;
+  right: 14px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns:
+    90px
+    170px
+    170px
+    190px
+    minmax(300px, 1.35fr)
+    minmax(300px, 1.35fr)
+    minmax(190px, 0.9fr);
+  pointer-events: none;
+}
+
+.hud-card {
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow);
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.hud-card span {
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.hud-card strong {
+  font-family: "Orbitron", "Space Grotesk", sans-serif;
+  font-size: 0.86rem;
+  letter-spacing: 0.03em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  text-align: right;
+}
+
+#earth-clock,
+#ship-clock,
+#time-delta {
+  font-size: 0.78rem;
+  letter-spacing: 0.015em;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.controls {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 20;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--card-bg);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow);
+  padding: 10px 12px;
+  pointer-events: none;
+  max-width: min(360px, 90vw);
+}
+
+.controls p {
+  margin: 0;
+  color: #d6e2f8;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.controls p + p {
+  margin-top: 4px;
+}
+
+.planet-panel {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 20;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--card-bg);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow);
+  padding: 10px 12px;
+  width: min(320px, 88vw);
+}
+
+.planet-panel h2 {
+  margin: 0 0 8px;
+  font: 700 0.78rem "Orbitron", "Space Grotesk", sans-serif;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #a9d2ff;
+}
+
+.panel-subtitle {
+  margin: 10px 0 6px;
+  font: 700 0.68rem "Orbitron", "Space Grotesk", sans-serif;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #8eb9ee;
+}
+
+.planet-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.planet-grid button,
+.return-btn {
+  border: 1px solid rgba(150, 190, 245, 0.4);
+  border-radius: 8px;
+  padding: 7px 8px;
+  color: #eaf3ff;
+  background: rgba(16, 36, 64, 0.7);
+  font: 600 0.74rem "Space Grotesk", sans-serif;
+  cursor: pointer;
+}
+
+.planet-grid button:hover,
+.return-btn:hover {
+  background: rgba(37, 69, 112, 0.8);
+}
+
+.return-btn {
+  margin-top: 8px;
+  width: 100%;
+  background: rgba(54, 31, 20, 0.75);
+  border-color: rgba(245, 176, 138, 0.4);
+}
+
+.music-btn {
+  margin-top: 8px;
+  width: 100%;
+  border: 1px solid rgba(150, 190, 245, 0.4);
+  border-radius: 8px;
+  padding: 7px 8px;
+  color: #eaf3ff;
+  background: rgba(16, 36, 64, 0.7);
+  font: 600 0.74rem "Space Grotesk", sans-serif;
+  cursor: pointer;
+}
+
+.music-btn:hover {
+  background: rgba(37, 69, 112, 0.8);
+}
+
+.music-btn.off {
+  background: rgba(43, 24, 20, 0.76);
+  border-color: rgba(245, 176, 138, 0.38);
+}
+
+.teleport-grid button {
+  font-size: 0.67rem;
+  padding: 6px 7px;
+}
+
+kbd {
+  display: inline-block;
+  min-width: 24px;
+  text-align: center;
+  font-family: "Orbitron", "Space Grotesk", sans-serif;
+  font-size: 0.72rem;
+  border-radius: 6px;
+  border: 1px solid rgba(150, 190, 245, 0.42);
+  background: rgba(31, 56, 92, 0.52);
+  padding: 1px 6px;
+  color: #eff6ff;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 7, 20, 0.52);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 250ms ease;
+}
+
+.overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.panel {
+  width: min(560px, 88vw);
+  border-radius: 18px;
+  padding: 24px;
+  border: 1px solid rgba(138, 190, 255, 0.42);
+  background: linear-gradient(140deg, rgba(6, 23, 53, 0.9), rgba(6, 12, 31, 0.92));
+  box-shadow: var(--shadow);
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-family: "Orbitron", "Space Grotesk", sans-serif;
+  font-size: 0.76rem;
+}
+
+.panel h1 {
+  margin: 8px 0 10px;
+  font-family: "Orbitron", "Space Grotesk", sans-serif;
+  font-size: clamp(1.9rem, 5.4vw, 3rem);
+}
+
+.panel p {
+  margin: 0 0 16px;
+  color: #d8e5ff;
+  line-height: 1.42;
+}
+
+#action-btn {
+  border: 0;
+  border-radius: 10px;
+  padding: 12px 20px;
+  font: 700 0.92rem "Orbitron", "Space Grotesk", sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #03131f;
+  background: linear-gradient(135deg, #66dcff, #a8f4ff);
+  cursor: pointer;
+}
+
+#action-btn:hover {
+  filter: brightness(1.08);
+}
+
+.tiny {
+  margin-top: 12px;
+  font-size: 0.78rem;
+  color: #a9bedc;
+}
+
+@media (max-width: 1080px) {
+  .hud {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .controls {
+    font-size: 0.72rem;
+  }
+}
