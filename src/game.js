@@ -87,9 +87,13 @@
   const tmpV2 = new THREE.Vector3();
   const tmpV3 = new THREE.Vector3();
   const tmpV4 = new THREE.Vector3();
+  const tmpV5 = new THREE.Vector3();
+  const tmpV6 = new THREE.Vector3();
   const tmpEuler = new THREE.Euler();
   const tmpQuat = new THREE.Quaternion();
   const tmpQuat2 = new THREE.Quaternion();
+  const tmpMat4 = new THREE.Matrix4();
+  const surfaceRaycaster = new THREE.Raycaster();
   const worldUp = new THREE.Vector3(0, 1, 0);
   const cameraLook = new THREE.Vector3();
   const C_KM_S = 299792.458;
@@ -212,10 +216,18 @@
     maxLagDistanceClose: 3.4
   };
   const SURFACE_CAMERA = {
-    followDistanceUnits: 1.3,
-    lookHeightUnits: 1.4,
-    heightOffsetUnits: 2.8,
-    clearanceUnits: 1.4
+    followDistanceUnits: 0.9,
+    shoulderOffsetUnits: -0.05,
+    lookHeightUnits: 0.22,
+    heightOffsetUnits: 0.05,
+    lookAheadUnits: 0.3,
+    clearanceUnits: 0.08,
+    collisionPaddingUnits: 0.12,
+    yawOffsetClamp: 0.55,
+    recenterSharpness: 5.5,
+    yawSharpness: 10,
+    positionSharpness: 12,
+    targetSharpness: 18
   };
 
   const REAL_DAYS_PER_YEAR = 365.256;
@@ -440,6 +452,10 @@
     const sign = hours < 0 ? -1 : 1;
     return sign * 5.6 / Math.max(6, Math.abs(hours));
   }
+  function dampAngle(current, target, sharpness, delta) {
+    const diff = THREE.MathUtils.euclideanModulo(target - current + Math.PI, Math.PI * 2) - Math.PI;
+    return current + diff * (1 - Math.exp(-sharpness * delta));
+  }
   const sunAroundBlackHoleOrbit = {
     // Keep Sun's black-hole orbit outside the outermost planetary orbit.
     radius: orbitDistance(OUTERMOST_PLANET_AU * 1.18),
@@ -660,10 +676,18 @@
     astronautActions: null,
     walkPhase: 0,
     camYaw: 0.5,
+    camYawOffset: 0,
     camPitch: -0.2,
     heading: 0,
     speed: 0,
-    groundOffset: 0
+    groundOffset: 0,
+    groundLiftUnits: 0.012,
+    bounds: 1100,
+    velocity: new THREE.Vector3(),
+    forward: new THREE.Vector3(0, 0, 1),
+    groundNormal: new THREE.Vector3(0, 1, 0),
+    spawnPoint: new THREE.Vector3(),
+    cameraOccluded: false
   };
   surfaceRoot.add(surface.astronautRig);
 
@@ -1478,7 +1502,12 @@
         : assets.astronaut.clone(true)
       : createFallbackAstronaut();
 
-    surface.astronautNode.scale.multiplyScalar(4.0);
+    fitObjectHeight(surface.astronautNode, ASTRONAUT_HEIGHT_UNITS);
+    surface.astronautNode.rotation.y = Math.PI;
+    const astronautBox = new THREE.Box3().setFromObject(surface.astronautNode);
+    surface.astronautNode.position.y -= astronautBox.min.y;
+    const groundedBox = new THREE.Box3().setFromObject(surface.astronautNode);
+    surface.groundLiftUnits = Math.max(0.012, (groundedBox.max.y - groundedBox.min.y) * 0.03);
     setShadowState(surface.astronautNode, true, true);
     surface.astronautRig.add(surface.astronautNode);
 
@@ -1509,6 +1538,108 @@
     }
   }
 
+  function sampleSurfaceNormal(x, z, out = new THREE.Vector3()) {
+    const step = Math.max(2, (surface.profile?.normalStep || 36) / SCALE.localMetersPerUnit);
+    const slopeX = surface.sampleHeight(x + step, z) - surface.sampleHeight(x - step, z);
+    const slopeZ = surface.sampleHeight(x, z + step) - surface.sampleHeight(x, z - step);
+    return out.set(-slopeX, step * 2, -slopeZ).normalize();
+  }
+
+  function projectOntoSurfacePlane(vector, normal, out = new THREE.Vector3()) {
+    out.copy(vector).addScaledVector(normal, -vector.dot(normal));
+    if (out.lengthSq() < 1e-6) {
+      return out.set(0, 0, 0);
+    }
+    return out.normalize();
+  }
+
+  function updateSurfaceRigTransform(targetPosition, normal, delta = 1) {
+    const targetY = surface.sampleHeight(targetPosition.x, targetPosition.z) + surface.groundOffset + surface.groundLiftUnits;
+    surface.astronautRig.position.x = targetPosition.x;
+    surface.astronautRig.position.z = targetPosition.z;
+    const yBlend = delta >= 1 ? 1 : 1 - Math.exp(-delta * 18);
+    surface.astronautRig.position.y = THREE.MathUtils.lerp(surface.astronautRig.position.y, targetY, yBlend);
+
+    tmpV6.copy(worldUp).lerp(normal, 0.28).normalize();
+    surface.groundNormal.lerp(tmpV6, delta >= 1 ? 1 : 1 - Math.exp(-delta * 12)).normalize();
+    projectOntoSurfacePlane(surface.forward, surface.groundNormal, tmpV1);
+    if (tmpV1.lengthSq() < 1e-6) {
+      tmpV1.set(0, 0, 1);
+    }
+    tmpV2.crossVectors(surface.groundNormal, tmpV1).normalize();
+    tmpV3.crossVectors(tmpV2, surface.groundNormal).normalize();
+    tmpMat4.makeBasis(tmpV2, surface.groundNormal, tmpV3);
+    tmpQuat.setFromRotationMatrix(tmpMat4);
+    if (delta >= 1) {
+      surface.astronautRig.quaternion.copy(tmpQuat);
+    } else {
+      surface.astronautRig.quaternion.slerp(tmpQuat, 1 - Math.exp(-delta * 12));
+    }
+  }
+
+  function resolveSurfaceCameraCollision(target, desiredPos, outPos) {
+    outPos.copy(desiredPos);
+    surface.cameraOccluded = false;
+
+    if (!surface.terrain && !surface.shuttle) {
+      return;
+    }
+
+    tmpV5.copy(desiredPos).sub(target);
+    const distance = tmpV5.length();
+    if (distance < 0.001) {
+      return;
+    }
+
+    tmpV5.multiplyScalar(1 / distance);
+    const collisionTargets = [];
+    if (surface.terrain) {
+      surface.terrain.updateMatrixWorld(true);
+      collisionTargets.push(surface.terrain);
+    }
+    if (surface.shuttle) {
+      surface.shuttle.updateMatrixWorld(true);
+      collisionTargets.push(surface.shuttle);
+    }
+    surfaceRaycaster.set(target, tmpV5);
+    surfaceRaycaster.far = distance;
+    const hit = surfaceRaycaster
+      .intersectObjects(collisionTargets, true)
+      .find((candidate) => candidate.distance > 0.02);
+    if (!hit) {
+      return;
+    }
+
+    surface.cameraOccluded = true;
+    const safeDistance = Math.max(0.26, hit.distance - SURFACE_CAMERA.collisionPaddingUnits);
+    outPos.copy(target).addScaledVector(tmpV5, safeDistance);
+  }
+
+  function computeSurfaceCameraPose(outPos, outTarget) {
+    const up = worldUp;
+    const pitch = surface.camPitch;
+    const horiz = Math.cos(pitch);
+    const offsetDir = tmpV3
+      .set(Math.sin(surface.camYaw) * horiz, Math.sin(pitch), Math.cos(surface.camYaw) * horiz)
+      .normalize();
+    const shoulderRight = tmpV4.crossVectors(up, offsetDir).normalize();
+    const target = outTarget
+      .copy(surface.astronautRig.position)
+      .addScaledVector(up, SURFACE_CAMERA.lookHeightUnits)
+      .addScaledVector(surface.forward, SURFACE_CAMERA.lookAheadUnits * THREE.MathUtils.lerp(0.45, 1, THREE.MathUtils.clamp(surface.speed / 0.62, 0, 1)));
+    tmpV6
+      .copy(target)
+      .addScaledVector(offsetDir, SURFACE_CAMERA.followDistanceUnits)
+      .addScaledVector(shoulderRight, SURFACE_CAMERA.shoulderOffsetUnits)
+      .addScaledVector(up, SURFACE_CAMERA.heightOffsetUnits);
+    resolveSurfaceCameraCollision(target, tmpV6, outPos);
+
+    const minCamY = surface.sampleHeight(outPos.x, outPos.z) + surface.groundOffset + SURFACE_CAMERA.clearanceUnits;
+    if (outPos.y < minCamY) {
+      outPos.y = minCamY;
+    }
+  }
+
   function buildSurface(planetName) {
     const p = planetData[planetName] || planetData.Moon;
     const profile = surfaceProfiles[planetName] || surfaceProfiles.Moon;
@@ -1516,6 +1647,8 @@
     const radiusUnits = (p.radiusKm * 1000) / SCALE.localMetersPerUnit;
     const size = profile.size;
     const seg = profile.seg;
+    const shuttleSpot = { x: 15, z: -24 };
+    const spawnSpot = { x: 9, z: -17 };
 
     if (surface.terrain) {
       surfaceRoot.remove(surface.terrain);
@@ -1546,7 +1679,7 @@
       ? []
       : createCraterField(seed, profile.craterCount, size * 0.46, profile.craterMin, profile.craterMax, profile.craterDepth);
 
-    const sampleHeight = (x, z) => {
+    const sampleBaseHeight = (x, z) => {
       const nx = x * profile.noiseScale;
       const nz = z * profile.noiseScale;
 
@@ -1572,6 +1705,29 @@
 
       const curvature = -(x * x + z * z) / (2 * radiusUnits);
       return h + curvature;
+    };
+
+    const landingZones = [
+      { x: spawnSpot.x, z: spawnSpot.z, radius: 1.6, blend: 1.0 },
+      { x: shuttleSpot.x, z: shuttleSpot.z, radius: 3.2, blend: 2.0 }
+    ].map((zone) => ({
+      ...zone,
+      y: sampleBaseHeight(zone.x, zone.z)
+    }));
+
+    const sampleHeight = (x, z) => {
+      let h = sampleBaseHeight(x, z);
+      for (const zone of landingZones) {
+        const dist = Math.hypot(x - zone.x, z - zone.z);
+        const outerRadius = zone.radius + zone.blend;
+        if (dist >= outerRadius) {
+          continue;
+        }
+        const blendT = dist <= zone.radius ? 1 : 1 - (dist - zone.radius) / zone.blend;
+        const flatten = THREE.MathUtils.smoothstep(blendT, 0, 1);
+        h = THREE.MathUtils.lerp(h, zone.y, flatten * 0.78);
+      }
+      return h;
     };
 
     const geo = new THREE.PlaneGeometry(size, size, seg, seg);
@@ -1631,21 +1787,37 @@
     surface.sampleHeight = sampleHeight;
     surface.profile = profile;
     surface.groundOffset = profile.groundOffset;
+    surface.bounds = size * 0.44;
 
     surface.shuttle = assets.shuttle ? assets.shuttle.clone(true) : fallbackSurfaceShuttle.clone(true);
     surface.shuttle.scale.multiplyScalar(SHUTTLE_SURFACE_SCALE);
-    surface.shuttle.position.set(15, sampleHeight(15, -24) + surface.groundOffset, -24);
+    surface.shuttle.position.set(
+      shuttleSpot.x,
+      sampleHeight(shuttleSpot.x, shuttleSpot.z) + surface.groundOffset,
+      shuttleSpot.z
+    );
     surface.shuttle.rotation.y = Math.PI * 0.6;
     setShadowState(surface.shuttle, true, true);
     surfaceRoot.add(surface.shuttle);
 
     setSurfaceAstronaut();
-    surface.astronautRig.position.set(0, sampleHeight(0, 0) + surface.groundOffset, 0);
+    surface.spawnPoint.set(
+      spawnSpot.x,
+      sampleHeight(spawnSpot.x, spawnSpot.z) + surface.groundOffset,
+      spawnSpot.z
+    );
+    surface.astronautRig.position.copy(surface.spawnPoint);
     surface.heading = 0;
     surface.speed = 0;
     surface.walkPhase = 0;
-    surface.camYaw = 0.5;
-    surface.camPitch = 0.05;
+    surface.velocity.set(0, 0, 0);
+    surface.forward.set(shuttleSpot.x - spawnSpot.x, 0, shuttleSpot.z - spawnSpot.z).normalize();
+    surface.groundNormal.set(0, 1, 0);
+    surface.camYawOffset = 0;
+    surface.camYaw = Math.atan2(-surface.forward.x, -surface.forward.z);
+    surface.camPitch = -0.16;
+    surface.cameraOccluded = false;
+    updateSurfaceRigTransform(surface.spawnPoint, sampleSurfaceNormal(surface.spawnPoint.x, surface.spawnPoint.z, tmpV4));
 
     scene.fog = new THREE.FogExp2(profile.fogColor, profile.fogDensity);
   }
@@ -1721,25 +1893,8 @@
   }
 
   function snapSurfaceCamera() {
-    const lookHeightUnits = SURFACE_CAMERA.lookHeightUnits;
-    const followRadiusUnits = SURFACE_CAMERA.followDistanceUnits;
-    const heightOffsetUnits = SURFACE_CAMERA.heightOffsetUnits;
-    const cameraClearance = SURFACE_CAMERA.clearanceUnits;
-    const target = tmpV1.copy(surface.astronautRig.position).add(new THREE.Vector3(0, lookHeightUnits, 0));
-    const h = Math.cos(surface.camPitch) * followRadiusUnits;
-    const camPos = tmpV2
-      .set(
-        Math.sin(surface.camYaw) * h,
-        Math.sin(surface.camPitch) * followRadiusUnits + heightOffsetUnits,
-        Math.cos(surface.camYaw) * h
-      )
-      .add(target);
-    const desiredGroundY = surface.sampleHeight(camPos.x, camPos.z) + surface.groundOffset + cameraClearance;
-    if (camPos.y < desiredGroundY) {
-      camPos.y = desiredGroundY;
-    }
-    camera.position.copy(camPos);
-    cameraLook.copy(target);
+    computeSurfaceCameraPose(camera.position, cameraLook);
+    surfaceSky.position.copy(surface.astronautRig.position);
     camera.lookAt(cameraLook);
   }
 
@@ -1828,6 +1983,10 @@
       if (e.code === "KeyM") {
         e.preventDefault();
         setMusicEnabled(!music.enabled);
+        return;
+      }
+      if (e.code === "Escape" && document.pointerLockElement === canvas) {
+        document.exitPointerLock?.();
         return;
       }
       if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight"].includes(e.code)) {
@@ -2007,7 +2166,7 @@
   }
 
   function updateAstronautAnimation(delta, moving, run) {
-    const moveBlend = THREE.MathUtils.clamp(surface.speed / 4.5, 0, 1);
+    const moveBlend = THREE.MathUtils.clamp((surface.speed * SCALE.localMetersPerUnit) / 4.5, 0, 1);
     if (surface.astronautMixer) {
       if (surface.astronautActions?.idle) {
         surface.astronautActions.idle.setEffectiveWeight(1 - moveBlend);
@@ -2027,7 +2186,7 @@
     surface.walkPhase += delta * (moving ? (run ? 11.8 : 8.2) : 2.4);
     const stride = moving ? (run ? 0.8 : 0.55) : 0.08;
     const armSwing = stride * 0.85;
-    const bob = moving ? Math.sin(surface.walkPhase * 2) * 0.07 : Math.sin(state.elapsed * 1.8) * 0.02;
+    const bob = moving ? Math.sin(surface.walkPhase * 2) * 0.008 : Math.sin(state.elapsed * 1.8) * 0.002;
 
     rig.leftLegPivot.rotation.x = Math.sin(surface.walkPhase) * stride;
     rig.rightLegPivot.rotation.x = Math.sin(surface.walkPhase + Math.PI) * stride;
@@ -2042,72 +2201,65 @@
     const fwd = (keyState.get("KeyW") ? 1 : 0) - (keyState.get("KeyS") ? 1 : 0);
     const strafe = (keyState.get("KeyD") ? 1 : 0) - (keyState.get("KeyA") ? 1 : 0);
     const run = keyState.get("ShiftLeft") || keyState.get("ShiftRight");
-    const speed = run ? 4.5 : 2.5;
+    const moveSpeed = (run ? 6.2 : 3.5) / SCALE.localMetersPerUnit;
     const moving = fwd !== 0 || strafe !== 0;
-    surface.speed = Math.hypot(fwd, strafe) * speed;
 
-    surface.camYaw += THREE.MathUtils.clamp(mouse.yawDelta, -0.16, 0.16);
-    surface.camPitch = THREE.MathUtils.clamp(surface.camPitch + THREE.MathUtils.clamp(mouse.pitchDelta, -0.12, 0.12), -1.1, 0.3);
+    const yawInput = THREE.MathUtils.clamp(mouse.yawDelta, -0.16, 0.16);
+    const pitchInput = THREE.MathUtils.clamp(mouse.pitchDelta, -0.12, 0.12);
+    surface.camYawOffset = THREE.MathUtils.clamp(
+      surface.camYawOffset + yawInput,
+      -SURFACE_CAMERA.yawOffsetClamp,
+      SURFACE_CAMERA.yawOffsetClamp
+    );
+    surface.camPitch = THREE.MathUtils.clamp(surface.camPitch + pitchInput, -0.42, 0.12);
     mouse.yawDelta *= 0.35;
     mouse.pitchDelta *= 0.35;
 
+    sampleSurfaceNormal(surface.astronautRig.position.x, surface.astronautRig.position.z, tmpV4);
+
+    let desiredSpeed = 0;
     if (moving) {
-      tmpV1.set(strafe, 0, -fwd).normalize();
-      const sin = Math.sin(surface.camYaw);
-      const cos = Math.cos(surface.camYaw);
-      const wx = tmpV1.x * cos - tmpV1.z * sin;
-      const wz = tmpV1.x * sin + tmpV1.z * cos;
-      surface.heading = Math.atan2(wx, wz);
-      surface.astronautRig.position.x += wx * speed * delta;
-      surface.astronautRig.position.z += wz * speed * delta;
+      const camForward = tmpV1.set(-Math.sin(surface.camYaw), 0, -Math.cos(surface.camYaw));
+      const camRight = tmpV2.set(-camForward.z, 0, camForward.x);
+      const desiredMove = tmpV3.copy(camForward).multiplyScalar(fwd).addScaledVector(camRight, strafe);
+      if (desiredMove.lengthSq() > 1) {
+        desiredMove.normalize();
+      }
+      projectOntoSurfacePlane(desiredMove, tmpV4, desiredMove);
+      if (desiredMove.lengthSq() > 0) {
+        desiredSpeed = moveSpeed;
+        surface.forward.lerp(desiredMove, 1 - Math.exp(-delta * (run ? 16 : 12))).normalize();
+      }
     }
-
-    const b = 1100;
-    surface.astronautRig.position.x = THREE.MathUtils.clamp(surface.astronautRig.position.x, -b, b);
-    surface.astronautRig.position.z = THREE.MathUtils.clamp(surface.astronautRig.position.z, -b, b);
-
-    const x = surface.astronautRig.position.x;
-    const z = surface.astronautRig.position.z;
-    const y = surface.sampleHeight(x, z) + surface.groundOffset;
-    surface.astronautRig.position.y = y;
-
-    const gradientStep = 2.5;
-    const slopeX = surface.sampleHeight(x + gradientStep, z) - surface.sampleHeight(x - gradientStep, z);
-    const slopeZ = surface.sampleHeight(x, z + gradientStep) - surface.sampleHeight(x, z - gradientStep);
-    tmpV1.set(-slopeX, gradientStep * 2, -slopeZ).normalize();
-    tmpQuat.setFromUnitVectors(worldUp, tmpV1);
-    tmpQuat2.setFromAxisAngle(worldUp, surface.heading);
-    surface.astronautRig.quaternion.copy(tmpQuat2).premultiply(tmpQuat);
-
-    updateAstronautAnimation(delta, moving, run);
-
-    const lookHeightUnits = SURFACE_CAMERA.lookHeightUnits;
-    const followRadiusUnits = SURFACE_CAMERA.followDistanceUnits;
-    const heightOffsetUnits = SURFACE_CAMERA.heightOffsetUnits;
-    const cameraClearance = SURFACE_CAMERA.clearanceUnits;
-
-    const target = tmpV1.copy(surface.astronautRig.position).add(new THREE.Vector3(0, lookHeightUnits, 0));
-    const h = Math.cos(surface.camPitch) * followRadiusUnits;
-    const camPos = tmpV2
-      .set(
-        Math.sin(surface.camYaw) * h,
-        Math.sin(surface.camPitch) * followRadiusUnits + heightOffsetUnits,
-        Math.cos(surface.camYaw) * h
-      )
-      .add(target);
-
-    const desiredGroundY = surface.sampleHeight(camPos.x, camPos.z) + surface.groundOffset + cameraClearance;
-    if (camPos.y < desiredGroundY) {
-      camPos.y = desiredGroundY;
+    surface.heading = Math.atan2(surface.forward.x, surface.forward.z);
+    if (moving) {
+      surface.camYawOffset *= Math.exp(-delta * SURFACE_CAMERA.recenterSharpness);
     }
+    const desiredCameraYaw = Math.atan2(-surface.forward.x, -surface.forward.z) + surface.camYawOffset;
+    surface.camYaw = dampAngle(surface.camYaw, desiredCameraYaw, SURFACE_CAMERA.yawSharpness, delta);
 
-    camera.position.lerp(camPos, 1 - Math.exp(-delta * 10));
-    const currentGroundY = surface.sampleHeight(camera.position.x, camera.position.z) + surface.groundOffset + cameraClearance;
+    const desiredVelocity = moving ? tmpV1.copy(surface.forward).multiplyScalar(desiredSpeed) : tmpV1.set(0, 0, 0);
+    surface.velocity.lerp(desiredVelocity, 1 - Math.exp(-delta * (moving ? 12 : 16)));
+
+    const targetPosition = tmpV2.copy(surface.astronautRig.position).addScaledVector(surface.velocity, delta);
+    targetPosition.x = THREE.MathUtils.clamp(targetPosition.x, -surface.bounds, surface.bounds);
+    targetPosition.z = THREE.MathUtils.clamp(targetPosition.z, -surface.bounds, surface.bounds);
+    sampleSurfaceNormal(targetPosition.x, targetPosition.z, tmpV3);
+    updateSurfaceRigTransform(targetPosition, tmpV3, delta);
+    surface.speed = surface.velocity.length();
+
+    updateAstronautAnimation(delta, surface.speed > 0.03, run);
+
+    computeSurfaceCameraPose(tmpV1, tmpV2);
+    const cameraBlend = surface.cameraOccluded ? 1 : 1 - Math.exp(-delta * SURFACE_CAMERA.positionSharpness);
+    camera.position.lerp(tmpV1, cameraBlend);
+    const currentGroundY = surface.sampleHeight(camera.position.x, camera.position.z) + surface.groundOffset + SURFACE_CAMERA.clearanceUnits;
     if (camera.position.y < currentGroundY) {
       camera.position.y = currentGroundY;
     }
-    cameraLook.lerp(target, 1 - Math.exp(-delta * 14));
+    cameraLook.lerp(tmpV2, 1 - Math.exp(-delta * SURFACE_CAMERA.targetSharpness));
     camera.lookAt(cameraLook);
+    surfaceSky.position.copy(surface.astronautRig.position);
   }
 
   function updatePlanets(delta) {
@@ -2209,7 +2361,7 @@
     const radiusKm = planetData[planetName]?.radiusKm || 6371;
     const x = surface.astronautRig.position.x;
     const z = surface.astronautRig.position.z;
-    const groundY = surface.sampleHeight(x, z);
+    const groundY = surface.sampleHeight(x, z) + surface.groundOffset + surface.groundLiftUnits;
     const altitudeMeters = Math.max(0, (surface.astronautRig.position.y - groundY) * SCALE.localMetersPerUnit);
     const radiusFromCenterKm = radiusKm + altitudeMeters / 1000;
     const rsKm = BODY_RS_KM[planetName] || BODY_RS_KM.Earth;
@@ -2262,7 +2414,11 @@
     } else {
       nearestEl.textContent = state.currentSurfacePlanet;
       speedEl.textContent = `${(surface.speed * SCALE.localMetersPerUnit).toFixed(1)} m/s`;
-      const alt = surface.astronautRig.position.y - surface.sampleHeight(surface.astronautRig.position.x, surface.astronautRig.position.z);
+      const alt =
+        surface.astronautRig.position.y -
+        (surface.sampleHeight(surface.astronautRig.position.x, surface.astronautRig.position.z) +
+          surface.groundOffset +
+          surface.groundLiftUnits);
       distanceEl.textContent = `${Math.max(0, alt * SCALE.localMetersPerUnit).toFixed(1)} m alt`;
     }
 
